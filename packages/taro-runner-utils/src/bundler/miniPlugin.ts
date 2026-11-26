@@ -12,6 +12,7 @@ import {
   promoteRelativePath,
   readConfig,
   REG_NODE_MODULES,
+  REG_NODE_MODULES_DIR,
   REG_STYLE,
   replaceAliasPath,
   resolveMainFilePath,
@@ -39,8 +40,39 @@ export const baseCompName = 'comp'
 export const customWrapperName = 'custom-wrapper'
 export const STYLE_ISOLATION_APPLY_SHARED = 'apply-shared'
 export const STYLE_ISOLATION_SHARED = 'shared'
+export const CHILD_COMPILER_TAG = 'child'
 
 export type IndependentPackage = { pages: string[], components: string[] }
+
+export interface IIndependentChildEntry {
+  request: string
+  name: string
+  miniType: META_TYPE
+  options?: Record<string, any>
+}
+
+export interface IIndependentChildCompilerAdapters {
+  /** Whether to copy compiler.outputFileSystem onto childCompiler (true in webpack5, false in Rspack to prevent double-emit) */
+  setChildOutputFileSystem?: boolean
+  /** Whether to set output.path = `${output.path}/${name}` on childCompiler (true in webpack5, false in Rspack) */
+  setChildOutputPath?: boolean
+  /** Apply JsonpTemplatePlugin, optional NaturalChunkIdsPlugin, CssExtractPlugin, etc. */
+  applyChildBasePlugins: (childCompiler: any, compiler: any) => void
+  /** SplitChunksPlugin class */
+  SplitChunksPlugin: any
+  /** RuntimeChunkPlugin class */
+  RuntimeChunkPlugin: any
+  /** Look up and remove an entry from the main compilation's entry collection */
+  takeEntryForIndependent: (entryPath: string) => IIndependentChildEntry | undefined
+  /** Register an entry on the child compiler */
+  addChildEntry: (childCompiler: any, compiler: any, entry: IIndependentChildEntry) => void
+  /** Create LoadChunksPlugin for the child compiler */
+  createChildLoadChunksPlugin: (options: {
+    commonChunks: string[]
+    pages: Set<IComponent>
+    needAddCommon: string[]
+  }) => { apply: (compiler: any) => void }
+}
 
 export interface MiniPluginHooks {
   /** 修改是否跳过根目录入口（comp/custom-wrapper）的生成 */
@@ -195,7 +227,10 @@ export abstract class BaseMiniPlugin<
   }
 
   public abstract getComponentConfig (): IComponentConfig
-  protected abstract getTemplateDir (): string
+
+  protected getTemplateDir (): string {
+    return path.resolve(__dirname, '../template')
+  }
 
   protected getDefinePluginClass (compiler: any): any {
     return compiler.webpack.DefinePlugin
@@ -206,9 +241,12 @@ export abstract class BaseMiniPlugin<
   protected abstract createLoadChunksPlugin (): { apply: (compiler: any) => void }
   protected abstract addLoadChunksPlugin (compiler: any): void
 
-  protected shouldSkipIndependentPageInMainGenerate (_page: IComponent): boolean {
-    return false
+  protected shouldSkipIndependentPageInMainGenerate (page: IComponent): boolean {
+    return Boolean(this.getIndependentPackage(page.path))
   }
+
+  protected removeAppEntry (): void {}
+  protected onAfterBuildNativeRun (_compiler: any): void {}
 
   protected onSubPackageIndieCustomWrapperRoots (compilation: any, roots: Set<string>): void {
     compilation[subPackageIndieCustomWrapperRootsKey] = roots
@@ -245,7 +283,11 @@ export abstract class BaseMiniPlugin<
   protected onCompilation (_compilation: any, _normalModuleFactory: any, _compiler: any): void {}
 
   protected async onProcessAssetsAdditional (compilation: any, compiler: any) {
-    await this.generateMiniFiles(compilation, compiler)
+    if ((compilation as any).__tag === CHILD_COMPILER_TAG) {
+      await this.generateIndependentMiniFiles(compilation, compiler)
+    } else {
+      await this.generateMiniFiles(compilation, compiler)
+    }
   }
 
   protected applyExtraCompilerPlugins (_compiler: any): void {}
@@ -1397,6 +1439,206 @@ export abstract class BaseMiniPlugin<
     }
   }
 
+  compileIndependentPagesWith (
+    compiler: any,
+    compilation: any,
+    promises: Promise<null>[],
+    adapters: IIndependentChildCompilerAdapters
+  ) {
+    const independentPackages = this.independentPackages
+    if (!independentPackages.size) return
+
+    const PLUGIN_NAME = 'TaroMiniPlugin'
+    const DefinePlugin = this.getDefinePluginClass(compiler)
+
+    independentPackages.forEach(({ pages, components }, name) => {
+      const outputOptions: Record<string, any> = {
+        chunkLoadingGlobal: `subpackage_${name}`
+      }
+      if (adapters.setChildOutputPath !== false) {
+        outputOptions.path = `${compiler.options.output.path}/${name}`
+      }
+      const childCompiler = compilation.createChildCompiler(PLUGIN_NAME, outputOptions)
+      const compPath = this.getCompTemplatePath()
+      childCompiler.inputFileSystem = compiler.inputFileSystem
+      if (adapters.setChildOutputFileSystem !== false) {
+        childCompiler.outputFileSystem = compiler.outputFileSystem
+      }
+      childCompiler.context = compiler.context
+
+      adapters.applyChildBasePlugins(childCompiler, compiler)
+
+      const constantsReplaceList = this.isWeappSubPackageIndieEnabled()
+        ? {
+          ...this.options.constantsReplaceList,
+          TARO_FORCE_CUSTOM_WRAPPER: JSON.stringify(this.computeForceCustomWrapperForIndieRoot(pages))
+        }
+        : this.options.constantsReplaceList
+      new DefinePlugin(constantsReplaceList).apply(childCompiler)
+
+      if (compiler.options.optimization) {
+        const nodeModulesDirRegx = new RegExp(REG_NODE_MODULES_DIR)
+        const sharedTemplateRegx = /[\\/](?:@tarojs[\\/]|taro-)(?:runner-utils|webpack5-runner)[\\/]dist[\\/]template(?:[\\/]|$)/
+        new adapters.SplitChunksPlugin({
+          chunks: 'all',
+          maxInitialRequests: Infinity,
+          minSize: 0,
+          cacheGroups: {
+            common: {
+              name: `${name}/common`,
+              minChunks: 2,
+              priority: 1
+            },
+            vendors: {
+              name: `${name}/vendors`,
+              minChunks: 1,
+              test: (module: any) => {
+                const resource = module?.resource || ''
+                return Boolean(
+                  resource &&
+                  nodeModulesDirRegx.test(resource) &&
+                  resource.indexOf(compPath) < 0 &&
+                  !sharedTemplateRegx.test(resource)
+                )
+              },
+              priority: 10
+            }
+          }
+        }).apply(childCompiler)
+        new adapters.RuntimeChunkPlugin({
+          name: `${name}/runtime`
+        }).apply(childCompiler)
+      }
+
+      const childPages = new Set<IComponent>()
+      pages.forEach(pagePath => {
+        const entry = adapters.takeEntryForIndependent(pagePath)
+        if (entry) {
+          adapters.addChildEntry(childCompiler, compiler, entry)
+        }
+        this.pages.forEach(item => {
+          if (item.path === pagePath) {
+            childPages.add(item)
+          }
+        })
+      })
+      components.forEach(componentPath => {
+        const entry = adapters.takeEntryForIndependent(componentPath)
+        if (entry) {
+          adapters.addChildEntry(childCompiler, compiler, entry)
+        }
+      })
+
+      adapters.createChildLoadChunksPlugin({
+        commonChunks: [`${name}/runtime`, `${name}/vendors`, `${name}/common`],
+        pages: childPages,
+        needAddCommon: [`${name}/comp`, `${name}/custom-wrapper`]
+      }).apply(childCompiler)
+
+      adapters.addChildEntry(childCompiler, compiler, {
+        request: this.getCompTemplatePath(),
+        name: `${name}/comp`,
+        miniType: META_TYPE.STATIC
+      })
+      adapters.addChildEntry(childCompiler, compiler, {
+        request: this.getCustomWrapperTemplatePath(),
+        name: `${name}/custom-wrapper`,
+        miniType: META_TYPE.STATIC
+      })
+
+      childCompiler.hooks.compilation.tap(PLUGIN_NAME, (childCompilation: any) => {
+        childCompilation.__name = name
+        childCompilation.__tag = CHILD_COMPILER_TAG
+      })
+
+      promises.push(new Promise<null>((resolve, reject) => {
+        childCompiler.runAsChild((err: any) => {
+          if (err) {
+            return reject(err)
+          }
+          resolve(null)
+        })
+      }).catch(err => {
+        // eslint-disable-next-line no-console
+        console.log(err)
+        return null
+      }))
+    })
+  }
+
+  /** 生成小程序独立分包的相关文件 */
+  async generateIndependentMiniFiles (compilation: any, compiler: any) {
+    const { template, sourceDir } = this.options
+    const componentConfig = this.getComponentConfig()
+    const baseTemplateName = 'base'
+    const isUsingCustomWrapper = componentConfig.thirdPartyComponents.has('custom-wrapper')
+    const childName = compilation.__name
+    this.independentPackages.forEach((_pages, name) => {
+      if (name !== childName) return
+
+      this.generateTemplateFile(compilation, compiler, `${name}/${baseTemplateName}`, template.buildTemplate, componentConfig)
+      if (!template.isSupportRecursive) {
+        const compConfig = {
+          component: true,
+          styleIsolation: STYLE_ISOLATION_APPLY_SHARED,
+          usingComponents: {
+            [baseCompName]: `./${baseCompName}`
+          }
+        } as Config & { component?: boolean, usingComponents: Record<string, string> }
+        if (!this.isWeappSubPackageIndieEnabled() || isUsingCustomWrapper) {
+          compConfig.usingComponents[customWrapperName] = `./${customWrapperName}`
+        }
+        this.generateConfigFile(compilation, compiler, `${name}/${baseCompName}`, compConfig)
+        this.generateTemplateFile(compilation, compiler, `${name}/${baseCompName}`, template.buildBaseComponentTemplate, this.options.fileType.templ)
+      }
+      this.generateConfigFile(compilation, compiler, `${name}/${customWrapperName}`, {
+        component: true,
+        styleIsolation: STYLE_ISOLATION_APPLY_SHARED,
+        usingComponents: {
+          [customWrapperName]: `./${customWrapperName}`
+        }
+      })
+      this.generateTemplateFile(compilation, compiler, `${name}/${customWrapperName}`, template.buildCustomComponentTemplate, this.options.fileType.templ)
+      this.generateXSFile(compilation, compiler, `${name}/utils`)
+    })
+
+    this.pages.forEach(page => {
+      let importBaseTemplatePath = promoteRelativePath(path.relative(page.path, path.join(sourceDir, this.getTemplatePath(baseTemplateName))))
+      const config = this.filesConfig[this.getConfigFilePath(page.name)]
+      let isIndependent = false
+      let independentName = ''
+      this.independentPackages.forEach(({ pages }, name) => {
+        if (pages.includes(page.path) && name === childName) {
+          isIndependent = true
+          independentName = name
+          importBaseTemplatePath = promoteRelativePath(path.relative(page.path, path.join(sourceDir, name, this.getTemplatePath(baseTemplateName))))
+        }
+      })
+
+      if (!isIndependent) return
+
+      if (!page.isNative) {
+        this.generateTemplateFile(compilation, compiler, page.path, template.buildPageTemplate, importBaseTemplatePath, config)
+      }
+
+      if (config) {
+        const importBaseCompPath = promoteRelativePath(path.relative(page.path, path.join(sourceDir, independentName, this.getTargetFilePath(baseCompName, ''))))
+        const importCustomWrapperPath = promoteRelativePath(path.relative(page.path, path.join(sourceDir, independentName, this.getTargetFilePath(customWrapperName, ''))))
+        config.content.usingComponents = {
+          ...config.content.usingComponents
+        }
+
+        if (isUsingCustomWrapper) {
+          config.content.usingComponents[customWrapperName] = importCustomWrapperPath
+        }
+        if (!template.isSupportRecursive && !page.isNative) {
+          config.content.usingComponents[baseCompName] = importBaseCompPath
+        }
+        this.generateConfigFile(compilation, compiler, page.path, config.content)
+      }
+    })
+  }
+
   addTabBarFilesToDependencies (compilation: any) {
     const { fileDependencies, missingDependencies } = compilation
     this.tabBarIcons.forEach(icon => {
@@ -1408,6 +1650,59 @@ export abstract class BaseMiniPlugin<
       }
     })
   }
+}
+
+type Constructor<T = Record<string, any>> = new (...args: any[]) => T
+
+export function createBuildNativePluginClass<TBase extends Constructor<BaseMiniPlugin<any, any>>> (
+  Base: TBase
+): TBase {
+  const BaseClass: new (...args: any[]) => any = Base
+
+  class BaseBuildNativePlugin extends BaseClass {
+    pageLoaderName = '@tarojs/taro-loader/lib/native-component'
+
+    apply (compiler: any) {
+      super.apply(compiler)
+      this.addLoadChunksPlugin(compiler)
+    }
+
+    async run (compiler: any) {
+      this.onBeforeRun()
+      this.appConfig = await this.getAppConfig()
+      this.getPages()
+      this.getPagesConfig()
+      this.getConfigFiles(compiler)
+      this.addEntries()
+      this.onAfterBuildNativeRun(compiler)
+    }
+
+    getPages () {
+      collectBuildNativePages(this as any)
+    }
+
+    addEntries () {
+      super.addEntries()
+      this.removeAppEntry()
+    }
+
+    generateConfigFile (compilation: any, compiler: any, filePath: string, config: Config & { component?: boolean }) {
+      if (filePath === this.appEntry) return
+      super.generateConfigFile(compilation, compiler, filePath, config)
+    }
+
+    injectCommonStyles ({ assets }: any, compiler: any) {
+      injectNativeComponentCommonStyles({
+        assets,
+        sources: this.getSources(compiler),
+        pages: this.pages,
+        commonChunks: this.options.commonChunks,
+        styleExt: this.options.fileType.style
+      })
+    }
+  }
+
+  return BaseBuildNativePlugin as unknown as TBase
 }
 
 export function collectBuildNativePages (plugin: BaseMiniPlugin) {

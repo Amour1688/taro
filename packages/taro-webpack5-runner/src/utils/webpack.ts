@@ -1,7 +1,9 @@
 import {
   addRequireToSourceWith,
+  chunkHasJs as sharedChunkHasJs,
   errorHandling,
-  getChunkEntryModuleFromCompilation
+  getChunkEntryModuleFromCompilation,
+  getChunkIdOrName as sharedGetChunkIdOrName
 } from '@tarojs/runner-utils/bundler/loadChunks'
 import { sources } from 'webpack'
 
@@ -23,15 +25,9 @@ export function getChunkEntryModule (compilation: Compilation, chunk: Chunk) {
 }
 
 export function getChunkIdOrName (chunk: Chunk) {
-  if (typeof chunk.id === 'string') {
-    return chunk.id
-  }
-  return chunk.name!
+  return sharedGetChunkIdOrName(chunk)
 }
 
 export function chunkHasJs (chunk: Chunk, chunkGraph: ChunkGraph) {
-  if (chunk.name === chunk.runtime) return true
-  if (chunkGraph.getNumberOfEntryModules(chunk) > 0) return true
-
-  return Boolean(chunkGraph.getChunkModulesIterableBySourceType(chunk, 'javascript'))
+  return sharedChunkHasJs(chunk, chunkGraph)
 }

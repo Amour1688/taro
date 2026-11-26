@@ -11,11 +11,14 @@ export function getH5OutputConfig (opts: {
   publicPath?: string
   chunkDirectory?: string
   customOutput?: Record<string, any>
-  filename: any
+  entryFileName?: string
+  filename?: any
 }) {
+  const entryFileName = opts.entryFileName ?? 'app'
+  const filename = opts.filename ?? ((chunk: any) => chunk.runtime === entryFileName ? 'js/[name].js' : '[name].js')
   return {
     path: opts.outputDir,
-    filename: opts.filename,
+    filename,
     chunkFilename: `${opts.chunkDirectory}/[name].js`,
     publicPath: parsePublicPath(opts.publicPath ?? '/'),
     ...opts.customOutput
@@ -35,6 +38,7 @@ export function getH5OptimizationConfig (opts: {
       name: isProd ? false : 'vendors',
       minChunks: 2,
       test: (module: any) => {
+        if (!module?.resource) return false
         const nodeModulesDirRegx = new RegExp(REG_NODE_MODULES_DIR)
         return nodeModulesDirRegx.test(module.resource)
       },
@@ -42,7 +46,7 @@ export function getH5OptimizationConfig (opts: {
     },
     taro: {
       name: isProd ? false : 'taro',
-      test: (module: any) => REG_TARO_SCOPED_PACKAGE.test(module.context),
+      test: (module: any) => Boolean(module?.context && REG_TARO_SCOPED_PACKAGE.test(module.context)),
       priority: 100
     }
   }
@@ -124,8 +128,16 @@ export function applyH5CombinationProcess (opts: {
   }
   combination.isVirtualEntry = isVirtualEntry
 
-  const getOutput = opts.getOutput || (o => combination.getOutput(o))
-  const getOptimization = opts.getOptimization || (env => combination.getOptimization(env))
+  const getOutput = opts.getOutput || (
+    typeof combination.getOutput === 'function'
+      ? (o: any) => combination.getOutput(o)
+      : (o: any) => getH5OutputConfig({ outputDir: combination.outputDir, ...o })
+  )
+  const getOptimization = opts.getOptimization || (
+    typeof combination.getOptimization === 'function'
+      ? (env: string) => combination.getOptimization(env)
+      : (env: string) => getH5OptimizationConfig({ nodeEnv: env, isBuildNativeComp: combination.isBuildNativeComp })
+  )
   const bundlerOutput = getOutput({ publicPath, chunkDirectory, customOutput: output as Record<string, any>, entryFileName })
   const module = bundlerModule.getModules()
   const [, pxtransformOption] = bundlerModule.__postcssOption.find(([name]) => name === 'postcss-pxtransform') || []

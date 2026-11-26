@@ -104,7 +104,7 @@ export default class SubPackageIndiePlugin {
       const root = this.isInSubPackageIndieRoot(componentName)
       if (!root) return
 
-      resolveData.dependencies.forEach((dependency: any) => {
+      resolveData.dependencies?.forEach((dependency: any) => {
         if (dependency.ids?.length > 0) {
           dependency.ids.forEach((id: string) => {
             const dashedName = this.toDashedComponentName(id)

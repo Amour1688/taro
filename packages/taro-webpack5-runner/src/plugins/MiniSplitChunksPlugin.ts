@@ -4,20 +4,20 @@ import { normalizePath, readConfig, resolveMainFilePath } from '@tarojs/helper'
 import {
   type ISubCommonDepInfo,
   collectExistingSubCommonDeps,
+  createSubPackageVendorsCacheGroups,
   extractMiniAppEntryPath,
   formatSubRoot,
   hasMainPackageChunk,
   isExcludeSplitModule,
   isMultiSubPackageDep,
   processSubPackageSplitAssets,
-  SUB_COMMON_DIR,
-  SUB_VENDORS_NAME
+  SUB_COMMON_DIR
 } from '@tarojs/runner-utils/bundler/splitChunks'
 import md5 from 'md5'
 import SplitChunksPlugin from 'webpack/lib/optimize/SplitChunksPlugin'
 
 import type { AppConfig, SubPackage } from '@tarojs/taro'
-import type { Chunk, ChunkGraph, Compilation, Compiler, Module, sources } from 'webpack'
+import type { Chunk, Compilation, Compiler, Module, sources } from 'webpack'
 import type { IFileType } from '../utils/types'
 import type { MiniCombination } from '../webpack/MiniCombination'
 
@@ -531,23 +531,10 @@ export default class MiniSplitChunksPlugin extends SplitChunksPlugin {
    * 仅分包有引用的module抽取到分包下的sub-vendors
    */
   getSubPackageVendorsCacheGroup () {
-    const subPackageVendorsCacheGroup = {}
-
-    this.subRoots.forEach(subRoot => {
-      subPackageVendorsCacheGroup[subRoot] = {
-        test: (module, { chunkGraph }: { chunkGraph: ChunkGraph }) => {
-          if (this.isExcludeModule(module)) {
-            return false
-          }
-          const chunks: any = Array.from(chunkGraph.getModuleChunksIterable(module))
-          return chunks.every(chunk => new RegExp(`^${subRoot}\\/`).test(chunk.name))
-        },
-        name: normalizePath(path.join(subRoot, SUB_VENDORS_NAME)),
-        minChunks: 2,
-        priority: 10000
-      }
-    })
-    return subPackageVendorsCacheGroup
+    return createSubPackageVendorsCacheGroups(
+      this.subRoots,
+      module => this.isExcludeModule(module)
+    )
   }
 
   /**

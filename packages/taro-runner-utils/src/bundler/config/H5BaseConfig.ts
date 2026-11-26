@@ -2,7 +2,7 @@ import path from 'node:path'
 
 import { defaultMainFields, resolveSync } from '@tarojs/helper'
 
-export function getH5ResolveConfig (appPath: string, mode?: string) {
+export function getH5ResolveConfig (appPath: string, mode?: string, fallbackResolve?: (id: string) => string) {
   const mainFields = [...defaultMainFields]
   if (mode !== 'production') {
     mainFields.unshift('main:h5')
@@ -22,12 +22,13 @@ export function getH5ResolveConfig (appPath: string, mode?: string) {
       return pkg
     },
   }
+  const resolvePkg = (id: string) => resolveSync(id, resolveOptions) || (fallbackResolve ? fallbackResolve(id) : null)
   return {
     mainFields,
     alias: {
       // Note: link 本地依赖调试，runtime 包需要指向本地 node_modules 顶层的 runtime，保证闭包值 Current 一致，shared 也一样
-      '@tarojs/runtime': resolveSync('@tarojs/runtime', resolveOptions),
-      '@tarojs/shared': resolveSync('@tarojs/shared', resolveOptions),
+      '@tarojs/runtime': resolvePkg('@tarojs/runtime'),
+      '@tarojs/shared': resolvePkg('@tarojs/shared'),
     },
   }
 }

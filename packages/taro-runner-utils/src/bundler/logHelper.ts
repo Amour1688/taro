@@ -182,7 +182,7 @@ export function reportBuildStats (
   if (stats.hasErrors()) {
     console.log(chalk.bgRed('✖ Errors: \n'))
     errors.forEach(e => console.log(e + '\n'))
-    !config.isWatch && process.exit(1)
+    !config.isWatch && process.env.NODE_ENV !== 'test' && process.exit(1)
   }
 
   if (config.isWatch) {

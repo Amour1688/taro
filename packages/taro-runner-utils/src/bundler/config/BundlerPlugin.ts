@@ -11,12 +11,16 @@ export interface IBundlerPluginOptions {
   bundler?: any
   loadModule?: (id: string) => any
   webpackBarPluginClass?: any
+  copyPluginClass?: any
+  cssExtractPluginClass?: any
 }
 
 export function createBundlerPlugin ({
   bundler,
   loadModule = id => require(id),
-  webpackBarPluginClass
+  webpackBarPluginClass,
+  copyPluginClass,
+  cssExtractPluginClass
 }: IBundlerPluginOptions = {}) {
   const getPlugin = (plugin, args: PluginArgs = []) => ({
     plugin,
@@ -28,7 +32,7 @@ export function createBundlerPlugin ({
 
     static getCopyWebpackPlugin = (appPath: string, copy: ICopyOptions) => {
       /** @doc https://webpack.js.org/plugins/copy-webpack-plugin */
-      const CopyWebpackPlugin = loadModule('copy-webpack-plugin')
+      const CopyWebpackPlugin = copyPluginClass || loadModule('copy-webpack-plugin')
       const patterns = normalizeCopyPatterns(appPath, copy)
       const args = { patterns }
       return getPlugin(CopyWebpackPlugin, [args])
@@ -44,7 +48,7 @@ export function createBundlerPlugin ({
     }
 
     static getMiniCssExtractPlugin = (args: Record<string, any>) => {
-      const MiniCssExtractPlugin = loadModule('mini-css-extract-plugin')
+      const MiniCssExtractPlugin = cssExtractPluginClass || loadModule('mini-css-extract-plugin')
       return getPlugin(MiniCssExtractPlugin, [args])
     }
 

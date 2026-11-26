@@ -23,6 +23,8 @@ export function getMiniOutputConfig (opts: {
   }
 }
 
+const REG_SHARED_TEMPLATE_DIR = /[\\/](?:@tarojs[\\/]|taro-)(?:runner-utils|webpack5-runner)[\\/]dist[\\/]template(?:[\\/]|$)/
+
 export function getMiniOptimizationConfig (opts: {
   extraCacheGroups?: Record<string, any>
 } = {}) {
@@ -41,14 +43,20 @@ export function getMiniOptimizationConfig (opts: {
           name: 'vendors',
           minChunks: 2,
           test: (module: any) => {
+            const res = module?.resource
+            if (!res || REG_SHARED_TEMPLATE_DIR.test(res)) return false
             const nodeModulesDirRegx = new RegExp(REG_NODE_MODULES_DIR)
-            return nodeModulesDirRegx.test(module.resource)
+            return nodeModulesDirRegx.test(res)
           },
           priority: 10
         },
         taro: {
           name: 'taro',
-          test: (module: any) => REG_TARO_SCOPED_PACKAGE.test(module.context),
+          test: (module: any) => {
+            const ctx = module?.context
+            if (!ctx || REG_SHARED_TEMPLATE_DIR.test(ctx)) return false
+            return REG_TARO_SCOPED_PACKAGE.test(ctx)
+          },
           priority: 100
         },
         ...opts.extraCacheGroups
@@ -101,8 +109,16 @@ export function applyMiniCombinationProcess (opts: {
     combination.optimizeMainPackage = optimizeMainPackage
   }
 
-  const bundlerEntry = (opts.getEntry || (e => combination.getEntry(e)))(entry)
-  const bundlerOutput = (opts.getOutput || (o => combination.getOutput(o)))({ publicPath: '/', globalObject, isBuildPlugin, output })
+  const bundlerEntry = (opts.getEntry || (
+    typeof combination.getEntry === 'function'
+      ? (e: any) => combination.getEntry(e)
+      : (e: any) => combination.isBuildPlugin ? combination.buildNativePlugin.entry : e
+  ))(entry)
+  const bundlerOutput = (opts.getOutput || (
+    typeof combination.getOutput === 'function'
+      ? (o: any) => combination.getOutput(o)
+      : (o: any) => getMiniOutputConfig({ outputDir: combination.outputDir, ...o })
+  ))({ publicPath: '/', globalObject, isBuildPlugin, output })
   const bundlerPlugin = createMiniPlugin()
   const bundlerModule = createMiniModule()
 
@@ -116,10 +132,20 @@ export function applyMiniCombinationProcess (opts: {
     output: bundlerOutput,
     mode,
     devtool: combination.getDevtool(sourceMapType),
-    resolve: { alias: (opts.getAlias || (() => combination.getAlias()))() },
+    resolve: {
+      alias: (opts.getAlias || (
+        typeof combination.getAlias === 'function'
+          ? () => combination.getAlias()
+          : () => getMiniAliasConfig(combination.config)
+      ))()
+    },
     plugin,
     module,
-    optimization: (opts.getOptimization || (p => combination.getOptimization(p)))(bundlerPlugin)
+    optimization: (opts.getOptimization || (
+      typeof combination.getOptimization === 'function'
+        ? (p: any) => combination.getOptimization(p)
+        : (p: any) => getMiniOptimizationConfig({ extraCacheGroups: p?.splitChunksInstance?.getCacheGroups?.() || {} })
+    ))(bundlerPlugin)
   }
   mergeChain ? mergeChain(chain, mergedConfig) : chain.merge(mergedConfig)
 }

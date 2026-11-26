@@ -1,13 +1,18 @@
+import crypto from 'node:crypto'
 import path from 'node:path'
 
 import { normalizePath, promoteRelativePath, readConfig, resolveMainFilePath } from '@tarojs/helper'
 import { isArray, isFunction, isString } from '@tarojs/shared'
 
 import type { AppConfig, SubPackage } from '@tarojs/taro'
-import type { IBundlerSources } from './types'
+import type { IBundlerSources, IFileType } from './types'
 
 export const SUB_COMMON_DIR = 'sub-common'
 export const SUB_VENDORS_NAME = 'sub-vendors'
+
+function md5Hex (value: string): string {
+  return crypto.createHash('md5').update(value).digest('hex')
+}
 
 export interface ISubCommonDepInfo {
   identifier: string
@@ -236,7 +241,8 @@ export function processSubPackageSplitAssets ({
       }
 
       if (assets[chunkName]) {
-        const originSource = assets[chunkName].source()
+        const rawOriginSource = assets[chunkName].source()
+        const originSource = Buffer.isBuffer(rawOriginSource) ? rawOriginSource.toString('utf8') : rawOriginSource
         if (ext === styleExt && typeof originSource === 'string') {
           if (originSource.indexOf('@charset') > -1) {
             assets[chunkName] = new RawSource(`@charset "UTF-8";${source.source()}${originSource.replace('@charset "UTF-8";', '')}`)
@@ -261,5 +267,182 @@ export function processSubPackageSplitAssets ({
     if (new RegExp(`^${SUB_COMMON_DIR}\\/.*`).test(assetPath)) {
       delete assets[assetPath]
     }
+  }
+}
+
+export function createSubPackageVendorsCacheGroups (
+  subRoots: string[],
+  isExclude: (module: any) => boolean,
+  getKey: (subRoot: string) => string = subRoot => subRoot
+): Record<string, any> {
+  const cacheGroups: Record<string, any> = {}
+
+  subRoots.forEach(subRoot => {
+    const subRootReg = new RegExp(`^${subRoot}\\/`)
+    cacheGroups[getKey(subRoot)] = {
+      test: (module: any, { chunkGraph }: any) => {
+        if (isExclude(module)) {
+          return false
+        }
+        if (!chunkGraph?.getModuleChunksIterable) {
+          return false
+        }
+        const chunks = Array.from(chunkGraph.getModuleChunksIterable(module)) as Array<{ name?: string | null }>
+        return chunks.length > 0 && chunks.every(chunk => Boolean(chunk.name && subRootReg.test(chunk.name)))
+      },
+      name: normalizePath(path.join(subRoot, SUB_VENDORS_NAME)),
+      minChunks: 2,
+      priority: 10000
+    }
+  })
+
+  return cacheGroups
+}
+
+export interface IStaticMiniSplitChunksPluginOptions {
+  exclude?: (string | ((module: any) => boolean))[]
+  fileType?: IFileType
+  combination: any
+  extraExts?: string[]
+}
+
+export class StaticMiniSplitChunksPlugin {
+  combination: any
+  subCommonDeps = new Map<string, ISubCommonDepInfo>()
+  subCommonChunks = new Map<string, Set<string>>()
+  subPackagesVendors = new Map<string, any>()
+  distPath = ''
+  exclude: (string | ((module: any) => boolean))[]
+  subPackages: SubPackage[] = []
+  subRoots: string[] = []
+  subRootRegExps: RegExp[] = []
+  fileType: IFileType
+  extraExts: string[]
+
+  constructor (options: IStaticMiniSplitChunksPluginOptions) {
+    this.exclude = options.exclude || []
+    this.fileType = options.fileType || {
+      style: '.wxss',
+      config: '.json',
+      script: '.js',
+      templ: '.wxml',
+      xs: '.wxs'
+    }
+    this.extraExts = options.extraExts || []
+    this.combination = options.combination
+    try {
+      const { subPackages, subRoots, subRootRegExps } = loadMiniSubPackages(
+        this.combination?.config?.entry,
+        this.combination?.config || {}
+      )
+      this.subPackages = subPackages
+      this.subRoots = subRoots
+      this.subRootRegExps = subRootRegExps
+    } catch {
+      // Ignore if appConfig is not yet readable at combination init
+    }
+  }
+
+  public getCacheGroups (): Record<string, any> {
+    if (this.subRoots.length === 0) return {}
+
+    const cacheGroups: Record<string, any> = createSubPackageVendorsCacheGroups(
+      this.subRoots,
+      module => isExcludeSplitModule(module, this.exclude),
+      subRoot => `subVendors_${subRoot}`
+    )
+
+    const getModuleIdInfo = (module: any) => {
+      const resource = module?.resource || (typeof module?.nameForCondition === 'function' ? module.nameForCondition() : '') || ''
+      const rawIdentifier = typeof module?.identifier === 'function' ? module.identifier() : ''
+      const idStr = resource || rawIdentifier
+      return { resource, rawIdentifier, idStr }
+    }
+
+    cacheGroups.subCommon = {
+      test: (module: any, { chunkGraph }: any) => {
+        if (module?.external) return false
+        if (isExcludeSplitModule(module, this.exclude)) return false
+        if (!chunkGraph?.getModuleChunksIterable) return false
+
+        const chunks = Array.from(chunkGraph.getModuleChunksIterable(module)) as Array<{ name?: string | null }>
+        const chunkNames = chunks.map(c => c.name || '').filter(Boolean)
+        if (chunkNames.length < 2) return false
+        if (hasMainPackageChunk(chunkNames, this.subRootRegExps) || !isMultiSubPackageDep(chunkNames, this.subRoots)) {
+          return false
+        }
+
+        const { resource, rawIdentifier, idStr } = getModuleIdInfo(module)
+        if (!idStr) return false
+
+        const depName = md5Hex(idStr)
+        const existing = this.subCommonDeps.get(depName)
+        if (existing) {
+          chunkNames.forEach(name => existing.chunks.add(name))
+        } else {
+          this.subCommonDeps.set(depName, {
+            identifier: idStr,
+            resource,
+            rawIdentifier: rawIdentifier || idStr,
+            chunks: new Set(chunkNames)
+          })
+        }
+        return true
+      },
+      name: (module: any) => {
+        const { idStr } = getModuleIdInfo(module)
+        return normalizePath(path.join(SUB_COMMON_DIR, md5Hex(idStr || 'shared')))
+      },
+      minChunks: 2,
+      priority: 1000
+    }
+
+    return cacheGroups
+  }
+
+  apply (compiler: any) {
+    if (this.subPackages.length === 0) return
+
+    this.distPath = compiler.options.output.path || ''
+
+    compiler.hooks.thisCompilation.tap('MiniSplitChunkPlugin', (compilation: any) => {
+      this.subCommonDeps.clear()
+      this.subCommonChunks.clear()
+      this.subPackagesVendors.clear()
+
+      compilation.hooks.processAssets.tapAsync(
+        {
+          name: 'MiniSplitChunkPlugin',
+          stage: compiler.webpack.Compilation.PROCESS_ASSETS_STAGE_ANALYSE
+        },
+        async (assets: Record<string, any>, callback: any) => {
+          try {
+            const { subPackagesVendors, existSubCommonDeps, subCommonChunks } = collectExistingSubCommonDeps(
+              compilation.chunks,
+              this.subRoots,
+              this.subCommonDeps
+            )
+            this.subPackagesVendors = subPackagesVendors
+            this.subCommonDeps = existSubCommonDeps
+            this.subCommonChunks = subCommonChunks
+
+            processSubPackageSplitAssets({
+              assets,
+              entryNames: compilation.entries.keys(),
+              distPath: this.distPath,
+              subRoots: this.subRoots,
+              subRootRegExps: this.subRootRegExps,
+              subCommonChunks: this.subCommonChunks,
+              styleExt: this.fileType.style,
+              extraExts: this.extraExts,
+              sources: compiler.webpack.sources
+            })
+            callback()
+          } catch (err: any) {
+            callback(err)
+          }
+        }
+      )
+    })
   }
 }

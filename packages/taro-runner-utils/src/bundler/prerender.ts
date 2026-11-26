@@ -25,7 +25,7 @@ export interface PrerenderBundlerConfig {
 }
 
 export interface PrerenderStats {
-  toJson: () => {
+  toJson: (options?: Record<string, any>) => {
     entrypoints?: Record<string, any>
     [key: string]: any
   }
@@ -143,7 +143,7 @@ export class Prerender {
     this.outputPath = bundlerConfig.output!.path!
     this.globalObject = bundlerConfig.output!.globalObject!
     this.prerenderConfig = buildConfig.prerender!
-    this.stat = stat.toJson()
+    this.stat = stat.toJson({ entrypoints: true })
     this.template = template
     this.adapter = template.Adapter
     this.vm = new VM({

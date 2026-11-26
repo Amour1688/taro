@@ -5,19 +5,10 @@ import { createGetPostcssPlugins } from './postcss-plugins'
 
 import type { Func, IHtmlTransformOption, IPostcssOption } from '@tarojs/taro/types/compile'
 
-const platform = process.env.TARO_ENV
 const defaultAutoprefixerOption = {
   enable: true,
   config: {
     flexbox: 'no-2009'
-  }
-}
-const defaultPxtransformOption: {
-  [key: string]: any
-} = {
-  enable: true,
-  config: {
-    platform
   }
 }
 
@@ -30,28 +21,35 @@ const defaultUrlOption: {
   }
 }
 
-const defaultHtmltransformOption: IHtmlTransformOption = {
-  enable: false,
-  config: {
-    platform,
-    removeCursorStyle: true
-  }
-}
-
 export const getDefaultPostcssConfig = function ({
   designWidth,
   deviceRatio,
   postcssOption = {} as IPostcssOption<'mini'>,
-  alias = {}
+  alias = {},
+  platform = process.env.TARO_ENV
+}: {
+  designWidth?: any
+  deviceRatio?: any
+  postcssOption?: IPostcssOption<'mini'>
+  alias?: Record<string, any>
+  platform?: string
 }): [string, any, Func?][] {
   const { autoprefixer, pxtransform, htmltransform, ...options } = postcssOption
 
-  if (designWidth) {
-    defaultPxtransformOption.config.designWidth = designWidth
+  const defaultPxtransformOption: { [key: string]: any } = {
+    enable: true,
+    config: {
+      ...(platform ? { platform } : {}),
+      ...(designWidth ? { designWidth } : {}),
+      ...(deviceRatio ? { deviceRatio } : {})
+    }
   }
-
-  if (deviceRatio) {
-    defaultPxtransformOption.config.deviceRatio = deviceRatio
+  const defaultHtmltransformOption: IHtmlTransformOption = {
+    enable: false,
+    config: {
+      ...(platform ? { platform } : {}),
+      removeCursorStyle: true
+    }
   }
 
   const autoprefixerOption = recursiveMerge({}, defaultAutoprefixerOption, autoprefixer)

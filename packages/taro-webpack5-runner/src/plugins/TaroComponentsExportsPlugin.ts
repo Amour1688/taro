@@ -1,10 +1,10 @@
 import { FRAMEWORK_MAP, taroJsComponents } from '@tarojs/helper'
+import { collectCreateElementTagsFromAst } from '@tarojs/runner-utils/bundler/componentCollector'
 import { toDashed } from '@tarojs/shared'
 
 import { componentConfig } from '../utils/component'
 
 import type { Func } from '@tarojs/taro/types/compile'
-import type acorn from 'acorn'
 import type AcornWalk from 'acorn-walk'
 import type { Compiler, NormalModule } from 'webpack'
 
@@ -18,7 +18,6 @@ interface IOptions {
   onParseCreateElement?: Func
 }
 
-// TODO 合并 TaroNormalModulesPlugin 逻辑
 export default class TaroComponentsExportsPlugin {
   onParseCreateElement?: Func
   #componentsExports: Set<string>
@@ -33,46 +32,9 @@ export default class TaroComponentsExportsPlugin {
       // react 的第三方组件支持
       normalModuleFactory.hooks.parser.for('javascript/auto').tap(PLUGIN_NAME, (parser) => {
         parser.hooks.program.tap(PLUGIN_NAME, (program) => {
-          walk.ancestor(program as unknown as acorn.Node, {
-            CallExpression: (node, _ancestors) => {
-              // @ts-ignore
-              const callee = node.callee
-
-              if (callee.type === 'MemberExpression') {
-                if (callee.property.type !== 'Identifier') {
-                  return
-                }
-                if (callee.property.name !== 'createElement') {
-                  return
-                }
-              } else {
-                const nameOfCallee = (callee as acorn.Identifier).name
-                if (
-                  // 兼容 react17 new jsx transtrom 以及esbuild-loader的ast兼容问题
-                  !/^_?jsxs?$/.test(nameOfCallee) &&
-                  // 兼容 Vue 3.0 渲染函数及 JSX
-                  !(nameOfCallee && nameOfCallee.includes('createVNode')) &&
-                  !(nameOfCallee && nameOfCallee.includes('createBlock')) &&
-                  !(nameOfCallee && nameOfCallee.includes('createElementVNode')) &&
-                  !(nameOfCallee && nameOfCallee.includes('createElementBlock')) &&
-                  !(nameOfCallee && nameOfCallee.includes('resolveComponent')) && // 收集使用解析函数的组件名称
-                  !(nameOfCallee && nameOfCallee.includes('_$createElement')) // solidjs创建元素
-                ) {
-                  return
-                }
-              }
-
-              // @ts-ignore
-              const type = node.arguments[0]
-              if ((type as acorn.Literal)?.value) {
-                this.onParseCreateElement?.((type as acorn.Literal).value, componentConfig)
-                // @ts-ignore
-                this.#componentsExports.add(type.value)
-              }
-            }
-          }, {
-            // @ts-ignore
-            ...walk.base, Import: walk.base.Import || (() => {})
+          collectCreateElementTagsFromAst(program, walk, (tag) => {
+            this.onParseCreateElement?.(tag, componentConfig)
+            this.#componentsExports.add(tag)
           })
         })
       })

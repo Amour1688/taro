@@ -1,9 +1,7 @@
-import { taroJsComponents } from '@tarojs/helper'
 import {
   BaseLoadChunksPlugin,
   transformEntryChunkSource
 } from '@tarojs/runner-utils/bundler/loadChunks'
-import { toDashed } from '@tarojs/shared'
 
 import { componentConfig } from '../utils/component'
 import { chunkHasJs, getChunkEntryModule, getChunkIdOrName } from '../utils/webpack'
@@ -14,8 +12,6 @@ import type TaroNormalModule from './TaroNormalModule'
 const PLUGIN_NAME = 'TaroLoadChunksPlugin'
 
 export default class TaroLoadChunksPlugin extends BaseLoadChunksPlugin {
-  isCompDepsFound: boolean
-
   apply (compiler: Compiler) {
     const addChunkPagesList = new Map<string, string[]>()
     const { ConcatSource } = compiler.webpack.sources
@@ -30,19 +26,13 @@ export default class TaroLoadChunksPlugin extends BaseLoadChunksPlugin {
          */
         commonChunks = chunksArray.filter(chunk => this.commonChunks.includes(chunk.name!) && chunkHasJs(chunk, compilation.chunkGraph)).reverse()
 
-        this.isCompDepsFound = false
-        for (const chunk of commonChunks) {
-          this.collectComponents(compiler, compilation, chunk)
-        }
-        if (!this.isCompDepsFound) {
-          // common chunks 找不到再去别的 chunk 中找
-          chunksArray
-            .filter(chunk => !this.commonChunks.includes(chunk.name!))
-            .some(chunk => {
-              this.collectComponents(compiler, compilation, chunk)
-              return this.isCompDepsFound
-            })
-        }
+        this.collectComponentsFromChunks(
+          compilation,
+          chunksArray,
+          commonChunks,
+          componentConfig,
+          compiler.webpack.util.comparators.compareModulesByIdentifier
+        )
 
         /**
          * 收集开发者在 addChunkPages 中配置的页面及其需要引用的公共文件
@@ -77,26 +67,5 @@ export default class TaroLoadChunksPlugin extends BaseLoadChunksPlugin {
         })
       })
     })
-  }
-
-  collectComponents (compiler: Compiler, compilation: Compilation, chunk: Chunk) {
-    const chunkGraph = compilation.chunkGraph
-    const moduleGraph = compilation.moduleGraph
-    const modulesIterable: Iterable<TaroNormalModule> = chunkGraph.getOrderedChunkModulesIterable(chunk, compiler.webpack.util.comparators.compareModulesByIdentifier) as any
-    for (const module of modulesIterable) {
-      if (module.rawRequest === taroJsComponents) {
-        this.isCompDepsFound = true
-        const includes = componentConfig.includes
-        const moduleUsedExports = moduleGraph.getUsedExports(module, chunk.runtime)
-        if (moduleUsedExports === null || typeof moduleUsedExports === 'boolean') {
-          componentConfig.includeAll = true
-        } else {
-          for (const item of moduleUsedExports) {
-            includes.add(toDashed(item))
-          }
-        }
-        break
-      }
-    }
   }
 }

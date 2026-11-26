@@ -38,11 +38,13 @@ export type CssModuleOptionConfig = Exclude<PostcssOption.cssModules['config'], 
 export interface IBundlerModuleOptions {
   resolveLoader?: (loaderName: string) => string
   loadModule?: (id: string) => any
+  extractCssLoader?: string
 }
 
 export function createBundlerModule ({
   resolveLoader = loaderName => require.resolve(loaderName),
-  loadModule = id => require(id)
+  loadModule = id => require(id),
+  extractCssLoader
 }: IBundlerModuleOptions = {}) {
   const getLoader = (loaderName: string, options: Record<string, any> = {}) => ({
     loader: resolveLoader(loaderName),
@@ -69,6 +71,9 @@ export function createBundlerModule ({
     }
 
     static getExtractCSSLoader = (): any => {
+      if (extractCssLoader) {
+        return { loader: extractCssLoader }
+      }
       const MiniCssExtractPlugin = loadModule('mini-css-extract-plugin')
       return {
         loader: MiniCssExtractPlugin.loader

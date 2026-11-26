@@ -15,6 +15,7 @@ export interface IRunH5BuildOptions<TConfig = any, TDevServerConfig = any> {
   config: Record<string, any>
   bundlerConfig: TConfig
   isBuildNativeComp: boolean
+  normalizeLegacyHttps?: boolean
   createCompiler: (bundlerConfig: TConfig) => any
   createDevServer: (devServerOptions: TDevServerConfig, compiler: any) => any
   onCompilerCreated?: (compiler: any) => void
@@ -23,7 +24,7 @@ export interface IRunH5BuildOptions<TConfig = any, TDevServerConfig = any> {
 export async function runH5Build<TStats = any, TConfig extends Record<string, any> = any, TDevServerConfig extends Record<string, any> = any> (
   opts: IRunH5BuildOptions<TConfig, TDevServerConfig>
 ): Promise<TStats | void> {
-  const { appPath, config, bundlerConfig, isBuildNativeComp, createCompiler, createDevServer, onCompilerCreated } = opts
+  const { appPath, config, bundlerConfig, isBuildNativeComp, normalizeLegacyHttps = false, createCompiler, createDevServer, onCompilerCreated } = opts
   const { entry = {} } = config
   const errorLevel = (typeof config.compiler !== 'string' && config.compiler?.errorLevel) || 0
 
@@ -69,13 +70,18 @@ export async function runH5Build<TStats = any, TConfig extends Record<string, an
       const routerMode = routerConfig.mode || 'hash'
       const routerBasename = routerConfig.basename || '/'
       const { getH5DevServerOptions } = require('./devServer') as typeof import('./devServer')
-      const devServerOptions = await getH5DevServerOptions<TDevServerConfig>(appPath, config as any)
+      const devServerOptions = await getH5DevServerOptions<TDevServerConfig>(appPath, config as any, normalizeLegacyHttps)
       ;(bundlerConfig as Record<string, any>).devServer = devServerOptions
 
       const firstEntry = Object.keys(entry as Record<string, any>)[0]
       const pathname = isBuildNativeComp ? `/${firstEntry}.html` : '/'
+      const isHttps = Boolean(
+        devServerOptions?.https ||
+        devServerOptions?.server === 'https' ||
+        devServerOptions?.server?.type === 'https'
+      )
       const devUrl = formatUrl({
-        protocol: devServerOptions?.https ? 'https' : 'http',
+        protocol: isHttps ? 'https' : 'http',
         hostname: formatOpenHost(devServerOptions?.host),
         port: devServerOptions?.port,
         pathname: routerMode === 'browser' ? routerBasename : pathname

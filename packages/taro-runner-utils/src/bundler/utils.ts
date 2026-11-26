@@ -369,10 +369,16 @@ export function getH5HtmlPluginArgs (
   const max = pxTransformOptions?.maxRootSize ?? 40
   const min = pxTransformOptions?.minRootSize ?? 20
   const baseFontSize = pxTransformOptions?.baseFontSize || (min > 1 ? min : 20)
-  const designWidth = (input => typeof pxTransformOptions.designWidth === 'function'
-    ? pxTransformOptions.designWidth(input)
-    : pxTransformOptions.designWidth)(baseFontSize)
-  const rootValue = baseFontSize / pxTransformOptions.deviceRatio![designWidth!] * 2
+  const designWidthOption = pxTransformOptions?.designWidth ?? 750
+  const deviceRatio = pxTransformOptions?.deviceRatio ?? {
+    640: 2.34 / 2,
+    750: 1,
+    828: 1.81 / 2
+  }
+  const designWidth = (input => typeof designWidthOption === 'function'
+    ? designWidthOption(input)
+    : designWidthOption)(baseFontSize)
+  const rootValue = baseFontSize / deviceRatio[designWidth!] * 2
   let htmlScript = ''
   if ((pxTransformOptions?.targetUnit ?? 'rem') === 'rem') {
     htmlScript = `!function(n){function f(){var e=n.document.documentElement,r=e.getBoundingClientRect(),width=r.width,height=r.height,arr=[width,height].filter(function(value){return Boolean(value)}),w=Math.min.apply(Math,arr),x=${rootValue}*w/${designWidth};e.style.fontSize=x>=${max}?"${max}px":x<=${min}?"${min}px":x+"px"}; n.addEventListener("resize",(function(){f();setTimeout(f,500)})),f()}(window);`

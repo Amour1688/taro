@@ -41,6 +41,7 @@
   "scripts": {
     "prod": "pnpm run build",
     "build": "tsc",
+    "postbuild": "node ./mv-comp.js",
     "dev": "tsc -w"
   },
   "repository": {

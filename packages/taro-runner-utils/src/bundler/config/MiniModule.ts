@@ -47,10 +47,6 @@ export abstract class BaseMiniModule<TCombination extends Record<string, any> = 
     return '.wxs'
   }
 
-  protected getEffectivePostcssOption (postcssOption: Record<string, any>) {
-    return postcssOption
-  }
-
   protected getBaseScriptRule (): IRule {
     return this.getModuleClass().getScriptRule()
   }
@@ -76,8 +72,9 @@ export abstract class BaseMiniModule<TCombination extends Record<string, any> = 
     this.__postcssOption = getDefaultPostcssConfig({
       designWidth,
       deviceRatio,
-      postcssOption: this.getEffectivePostcssOption(postcssOption) as any,
-      alias: config.alias
+      postcssOption: postcssOption as any,
+      alias: config.alias,
+      platform: process.env.TARO_ENV || buildAdapter
     })
 
     const postcssPlugins = getPostcssPlugins(appPath, this.__postcssOption)

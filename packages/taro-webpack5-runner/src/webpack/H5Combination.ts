@@ -56,13 +56,12 @@ export class H5Combination extends Combination<IH5BuildConfig> {
     customOutput?: Output
     entryFileName?: string
   }): Output {
-    const filename: Output['filename'] = (chunk) => chunk.runtime === entryFileName ? 'js/[name].js' : '[name].js'
     return getH5OutputConfig({
       outputDir: this.outputDir,
       publicPath,
       chunkDirectory,
       customOutput,
-      filename
+      entryFileName
     })
   }
 

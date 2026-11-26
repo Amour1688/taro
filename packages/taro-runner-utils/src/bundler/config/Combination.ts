@@ -82,6 +82,6 @@ export class BaseCombination<T extends CommonBuildConfig<any> = CommonBuildConfi
 
   getDevtool (sourceMapType: string): any {
     /** @docs https://webpack.js.org/configuration/devtool/ */
-    return this.enableSourceMap && sourceMapType
+    return (this.enableSourceMap && sourceMapType) || false
   }
 }
